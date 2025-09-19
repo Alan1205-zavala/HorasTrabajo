@@ -1,0 +1,16 @@
+{
+  "name": "control-horas-local",
+  "version": "1.0.0",
+  "description": "Sistema local de control de horas laborales con SQLite",
+  "main": "index.html",
+  "scripts": {
+    "start": "http-server -p 8080",
+    "dev": "http-server -p 8080 -o"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  },
+  "keywords": ["horas", "laboral", "sqlite", "local"],
+  "author": "Tu Nombre",
+  "license": "MIT"
+}
