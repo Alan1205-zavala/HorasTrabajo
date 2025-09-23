@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Control de Horas Laborales - Local</title>
     <link rel="stylesheet" href="style.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
@@ -13,20 +12,22 @@
     <div class="container">
         <header>
             <h1>Control de Horas Laborales</h1>
-            <p>Sistema local con base de datos SQLite</p>
+            <p>Sistema local con almacenamiento persistente</p>
         </header>
         
         <div class="user-section">
             <div class="user-info" id="current-user">Usuario: Local</div>
+            <div class="notification" id="notification" style="display: none;"></div>
         </div>
         
         <div class="card">
             <h2>Registro de Jornada</h2>
             <div class="current-time" id="current-time">--:--:--</div>
+            <div class="current-date" id="current-date"></div>
             
             <div class="time-controls">
                 <button class="btn btn-primary" id="btn-iniciar">Iniciar Jornada</button>
-                <button class="btn btn-danger" id="btn-pausa">Pausa</button>
+                <button class="btn btn-warning" id="btn-pausa">Pausa/Reanudar</button>
                 <button class="btn btn-success" id="btn-finalizar">Finalizar Jornada</button>
             </div>
             
@@ -48,8 +49,20 @@
         
         <div class="card">
             <h2>Registro de Actividades</h2>
-            <textarea id="actividades" placeholder="Describe las actividades realizadas hoy..."></textarea>
-            <button class="btn btn-primary" id="btn-guardar-actividades">Guardar Actividades</button>
+            <div class="activities-controls">
+                <button class="btn btn-primary" id="btn-nueva-actividad">+ Nueva Actividad</button>
+                <button class="btn btn-secondary" id="btn-guardar-todo">Guardar Todo</button>
+            </div>
+            
+            <div id="actividades-container">
+                <!-- Las actividades se agregarán aquí dinámicamente -->
+            </div>
+            
+            <div class="activities-summary">
+                <h3>Resumen del Día</h3>
+                <textarea id="resumen-diario" placeholder="Resumen general de las actividades del día..."></textarea>
+                <button class="btn btn-primary" id="btn-guardar-resumen">Guardar Resumen</button>
+            </div>
         </div>
         
         <div class="card">
@@ -59,8 +72,12 @@
                     <label for="filtro-fecha">Filtrar por fecha:</label>
                     <input type="date" id="filtro-fecha">
                 </div>
+                <div class="form-group">
+                    <label for="filtro-mes">Filtrar por mes:</label>
+                    <input type="month" id="filtro-mes">
+                </div>
                 <button class="btn btn-primary" id="btn-filtrar">Filtrar</button>
-                <button class="btn" id="btn-limpiar-filtro">Limpiar Filtro</button>
+                <button class="btn" id="btn-limpiar-filtro">Mostrar Todo</button>
             </div>
             
             <table id="tabla-historial">

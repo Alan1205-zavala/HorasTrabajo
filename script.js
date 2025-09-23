@@ -1,31 +1,40 @@
 // Variables globales
-let db = null;
 let registros = [];
 let sesionActual = null;
 let registrosFiltrados = [];
+let actividadesDelDia = [];
+let resumenDiario = '';
 
 // Elementos DOM
 const elementoHoraActual = document.getElementById('current-time');
+const elementoFechaActual = document.getElementById('current-date');
 const elementoHorasHoy = document.getElementById('horas-hoy');
 const elementoHorasSemana = document.getElementById('horas-semana');
 const elementoEstado = document.getElementById('estado');
-const elementoActividades = document.getElementById('actividades');
 const cuerpoTablaHistorial = document.querySelector('#tabla-historial tbody');
 const modalEditar = document.getElementById('modal-editar');
+const actividadesContainer = document.getElementById('actividades-container');
+const notificacion = document.getElementById('notification');
+
+// Clave para localStorage
+const STORAGE_KEY = 'controlHorasData';
 
 // Inicialización
 document.addEventListener('DOMContentLoaded', () => {
-    actualizarHoraActual();
-    setInterval(actualizarHoraActual, 1000);
+    actualizarHoraYFecha();
+    setInterval(actualizarHoraYFecha, 1000);
     
-    // Inicializar la base de datos
-    inicializarBaseDeDatos();
+    // Cargar datos guardados
+    cargarDatos();
     
     // Event listeners
     document.getElementById('btn-iniciar').addEventListener('click', iniciarJornada);
     document.getElementById('btn-pausa').addEventListener('click', pausarJornada);
     document.getElementById('btn-finalizar').addEventListener('click', finalizarJornada);
-    document.getElementById('btn-guardar-actividades').addEventListener('click', guardarActividades);
+    
+    document.getElementById('btn-nueva-actividad').addEventListener('click', agregarNuevaActividad);
+    document.getElementById('btn-guardar-todo').addEventListener('click', guardarTodasActividades);
+    document.getElementById('btn-guardar-resumen').addEventListener('click', guardarResumen);
     
     document.getElementById('btn-filtrar').addEventListener('click', filtrarRegistros);
     document.getElementById('btn-limpiar-filtro').addEventListener('click', limpiarFiltro);
@@ -42,118 +51,192 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('click', (e) => {
         if (e.target === modalEditar) cerrarModal();
     });
+    
+    // Guardar automáticamente antes de cerrar la página
+    window.addEventListener('beforeunload', guardarDatos);
 });
 
-// Funciones de base de datos
-async function inicializarBaseDeDatos() {
-    try {
-        // Intentar cargar sql.js
-        const SQL = await initSqlJs({
-            locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}`
-        });
-        
-        // Crear o cargar la base de datos
-        const dataLocal = localStorage.getItem('baseDeDatos');
-        
-        if (dataLocal) {
-            // Cargar base de datos existente
-            const buffer = Uint8Array.from(JSON.parse(dataLocal)).buffer;
-            db = new SQL.Database(new Uint8Array(buffer));
-        } else {
-            // Crear nueva base de datos
-            db = new SQL.Database();
-            
-            // Crear tabla de registros
-            db.run(`
-                CREATE TABLE registros (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    fecha TEXT NOT NULL,
-                    hora_inicio TEXT NOT NULL,
-                    hora_fin TEXT,
-                    actividades TEXT,
-                    creado_en DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    actualizado_en DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            `);
-            
-            guardarBaseDeDatos();
-        }
-        
-        // Cargar datos
-        cargarDatos();
-    } catch (error) {
-        console.error('Error al inicializar la base de datos:', error);
-        alert('Error al inicializar la base de datos. Usando almacenamiento local como respaldo.');
-        
-        // Usar localStorage como respaldo
-        const datosLocal = localStorage.getItem('registros');
-        if (datosLocal) {
-            registros = JSON.parse(datosLocal);
-        }
-        
-        actualizarEstadisticas();
-        renderizarTablaHistorial();
-    }
+// Funciones de utilidad
+function mostrarNotificacion(mensaje, tipo = 'success') {
+    notificacion.textContent = mensaje;
+    notificacion.className = `notification ${tipo}`;
+    notificacion.style.display = 'block';
+    
+    setTimeout(() => {
+        notificacion.style.display = 'none';
+    }, 3000);
 }
 
-function guardarBaseDeDatos() {
-    if (db) {
-        const data = db.export();
-        const arrayData = Array.from(new Uint8Array(data));
-        localStorage.setItem('baseDeDatos', JSON.stringify(arrayData));
+function obtenerFechaActual() {
+    const ahora = new Date();
+    // Usar toLocaleDateString con opciones específicas para evitar problemas de zona horaria
+    return ahora.toLocaleDateString('es-ES', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        timeZone: 'America/Mexico_City' // Ajusta según tu zona horaria
+    });
+}
+
+function obtenerFechaHoraActual() {
+    const ahora = new Date();
+    return {
+        fecha: obtenerFechaActual(),
+        hora: ahora.toLocaleTimeString('es-ES', { 
+            hour: '2-digit', 
+            minute: '2-digit',
+            timeZone: 'America/Mexico_City'
+        })
+    };
+}
+
+function actualizarHoraYFecha() {
+    const ahora = new Date();
+    elementoHoraActual.textContent = ahora.toLocaleTimeString('es-ES', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+    });
+    elementoFechaActual.textContent = ahora.toLocaleDateString('es-ES', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+    });
+}
+
+// Funciones de persistencia de datos
+function guardarDatos() {
+    const datos = {
+        registros: registros,
+        actividadesDelDia: actividadesDelDia,
+        resumenDiario: resumenDiario,
+        sesionActual: sesionActual,
+        ultimaActualizacion: new Date().toISOString()
+    };
+    
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(datos));
+        console.log('Datos guardados correctamente');
+    } catch (error) {
+        console.error('Error al guardar datos:', error);
+        mostrarNotificacion('Error al guardar datos', 'error');
     }
 }
 
 function cargarDatos() {
-    if (!db) return;
-    
     try {
-        // Obtener todos los registros
-        const result = db.exec("SELECT * FROM registros ORDER BY fecha DESC, hora_inicio DESC");
+        const datosGuardados = localStorage.getItem(STORAGE_KEY);
         
-        if (result.length > 0) {
-            registros = result[0].values.map(row => ({
-                id: row[0],
-                fecha: row[1],
-                hora_inicio: row[2],
-                hora_fin: row[3],
-                actividades: row[4],
-                creado_en: row[5],
-                actualizado_en: row[6]
-            }));
+        if (datosGuardados) {
+            const datos = JSON.parse(datosGuardados);
+            registros = datos.registros || [];
+            actividadesDelDia = datos.actividadesDelDia || [];
+            resumenDiario = datos.resumenDiario || '';
+            sesionActual = datos.sesionActual || null;
+            
+            // Verificar si la sesión actual es del día de hoy
+            const fechaHoy = obtenerFechaActual();
+            if (sesionActual && sesionActual.fecha !== fechaHoy) {
+                sesionActual = null;
+            }
+            
+            mostrarNotificacion('Datos cargados correctamente');
         } else {
             registros = [];
-        }
-        
-        // Encontrar sesión activa del día
-        const hoy = new Date().toLocaleDateString('es-ES');
-        sesionActual = registros.find(registro => 
-            registro.fecha === hoy && registro.hora_fin === null) || null;
-        
-        // Cargar actividades del día actual si existen
-        const registroHoy = registros.find(registro => 
-            registro.fecha === hoy && registro.actividades);
-            
-        if (registroHoy) {
-            elementoActividades.value = registroHoy.actividades || '';
-        } else {
-            elementoActividades.value = '';
+            actividadesDelDia = [];
+            resumenDiario = '';
+            sesionActual = null;
         }
         
         actualizarEstado();
         actualizarEstadisticas();
         renderizarTablaHistorial();
+        renderizarActividades();
+        document.getElementById('resumen-diario').value = resumenDiario;
     } catch (error) {
         console.error('Error al cargar datos:', error);
+        mostrarNotificacion('Error al cargar datos', 'error');
     }
 }
 
-// Funciones principales
-function actualizarHoraActual() {
-    const ahora = new Date();
-    elementoHoraActual.textContent = ahora.toLocaleTimeString();
+// Funciones de actividades
+function renderizarActividades() {
+    actividadesContainer.innerHTML = '';
+    
+    actividadesDelDia.forEach((actividad, index) => {
+        const actividadDiv = document.createElement('div');
+        actividadDiv.className = 'activity-item';
+        actividadDiv.innerHTML = `
+            <input type="checkbox" class="activity-checkbox" ${actividad.completada ? 'checked' : ''} 
+                   onchange="marcarActividadCompletada(${index}, this.checked)">
+            <div class="activity-content">
+                <input type="text" class="activity-text" value="${actividad.texto}" 
+                       placeholder="Describe la actividad..." 
+                       onchange="actualizarActividad(${index}, this.value)">
+                <div class="activity-actions">
+                    <button class="btn btn-danger" onclick="eliminarActividad(${index})">×</button>
+                </div>
+            </div>
+        `;
+        actividadesContainer.appendChild(actividadDiv);
+    });
 }
 
+function agregarNuevaActividad() {
+    actividadesDelDia.push({
+        texto: '',
+        completada: false,
+        timestamp: new Date().toISOString()
+    });
+    renderizarActividades();
+    guardarDatos();
+    mostrarNotificacion('Nueva actividad agregada');
+}
+
+function actualizarActividad(index, nuevoTexto) {
+    if (index >= 0 && index < actividadesDelDia.length) {
+        actividadesDelDia[index].texto = nuevoTexto;
+        actividadesDelDia[index].timestamp = new Date().toISOString();
+        guardarDatos();
+    }
+}
+
+function marcarActividadCompletada(index, completada) {
+    if (index >= 0 && index < actividadesDelDia.length) {
+        actividadesDelDia[index].completada = completada;
+        guardarDatos();
+    }
+}
+
+function eliminarActividad(index) {
+    if (index >= 0 && index < actividadesDelDia.length) {
+        actividadesDelDia.splice(index, 1);
+        renderizarActividades();
+        guardarDatos();
+        mostrarNotificacion('Actividad eliminada');
+    }
+}
+
+function guardarTodasActividades() {
+    // Forzar guardado de todas las actividades
+    const inputs = document.querySelectorAll('.activity-text');
+    inputs.forEach((input, index) => {
+        if (index < actividadesDelDia.length) {
+            actividadesDelDia[index].texto = input.value;
+        }
+    });
+    guardarDatos();
+    mostrarNotificacion('Todas las actividades guardadas');
+}
+
+function guardarResumen() {
+    resumenDiario = document.getElementById('resumen-diario').value;
+    guardarDatos();
+    mostrarNotificacion('Resumen guardado');
+}
+
+// Funciones principales de jornada laboral
 function actualizarEstado() {
     if (sesionActual) {
         elementoEstado.textContent = 'Trabajando';
@@ -166,157 +249,82 @@ function actualizarEstado() {
 
 function iniciarJornada() {
     if (sesionActual) {
-        alert('Ya tienes una jornada iniciada.');
+        mostrarNotificacion('Ya tienes una jornada iniciada', 'error');
         return;
     }
     
-    const ahora = new Date();
-    const hora_inicio = ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
-    const fecha = ahora.toLocaleDateString('es-ES');
+    const { fecha, hora } = obtenerFechaHoraActual();
     
-    try {
-        if (db) {
-            // Insertar en la base de datos
-            db.run(
-                "INSERT INTO registros (fecha, hora_inicio) VALUES (?, ?)",
-                [fecha, hora_inicio]
-            );
-            
-            guardarBaseDeDatos();
-            
-            // Obtener el ID del último registro insertado
-            const result = db.exec("SELECT last_insert_rowid()");
-            const nuevoId = result[0].values[0][0];
-            
-            sesionActual = {
-                id: nuevoId,
-                fecha: fecha,
-                hora_inicio: hora_inicio,
-                hora_fin: null,
-                actividades: ''
-            };
-            
-            registros.unshift(sesionActual);
-        } else {
-            // Respaldo con localStorage
-            const nuevoRegistro = {
-                id: Date.now(),
-                fecha: fecha,
-                hora_inicio: hora_inicio,
-                hora_fin: null,
-                actividades: '',
-                creado_en: new Date().toISOString(),
-                actualizado_en: new Date().toISOString()
-            };
-            
-            sesionActual = nuevoRegistro;
-            registros.unshift(nuevoRegistro);
-            localStorage.setItem('registros', JSON.stringify(registros));
-        }
-        
-        actualizarEstado();
-        alert('Jornada iniciada a las ' + hora_inicio);
-    } catch (error) {
-        console.error('Error al iniciar jornada:', error);
-        alert('Error al iniciar la jornada: ' + error.message);
-    }
+    sesionActual = {
+        id: Date.now(),
+        fecha: fecha,
+        inicio: hora,
+        fin: null,
+        actividades: actividadesDelDia.map(a => a.texto).filter(t => t.trim() !== ''),
+        resumen: resumenDiario,
+        timestamp: new Date().toISOString()
+    };
+    
+    guardarDatos();
+    actualizarEstado();
+    mostrarNotificacion(`Jornada iniciada a las ${hora}`);
 }
 
 function pausarJornada() {
     if (!sesionActual) {
-        alert('No hay una jornada activa para pausar.');
+        mostrarNotificacion('No hay una jornada activa', 'error');
         return;
     }
     
-    alert('Función de pausa en desarrollo. Por ahora, usa "Finalizar Jornada" al terminar.');
+    // En un sistema más avanzado, aquí podrías manejar pausas específicas
+    mostrarNotificacion('Función de pausa/reanudación en desarrollo');
 }
 
 function finalizarJornada() {
     if (!sesionActual) {
-        alert('No hay una jornada activa para finalizar.');
+        mostrarNotificacion('No hay una jornada activa para finalizar', 'error');
         return;
     }
     
-    const ahora = new Date();
-    const hora_fin = ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+    const { hora } = obtenerFechaHoraActual();
     
-    // Guardar actividades antes de finalizar
-    const actividades = elementoActividades.value;
+    // Actualizar actividades y resumen antes de finalizar
+    guardarTodasActividades();
+    guardarResumen();
     
-    try {
-        if (db) {
-            // Actualizar en la base de datos
-            db.run(
-                "UPDATE registros SET hora_fin = ?, actividades = ? WHERE id = ?",
-                [hora_fin, actividades, sesionActual.id]
-            );
-            
-            guardarBaseDeDatos();
-            
-            // Actualizar localmente
-            sesionActual.hora_fin = hora_fin;
-            sesionActual.actividades = actividades;
-        } else {
-            // Respaldo con localStorage
-            sesionActual.hora_fin = hora_fin;
-            sesionActual.actividades = actividades;
-            localStorage.setItem('registros', JSON.stringify(registros));
-        }
-        
-        alert('Jornada finalizada a las ' + hora_fin);
-        sesionActual = null;
-        actualizarEstado();
-        actualizarEstadisticas();
-        renderizarTablaHistorial();
-    } catch (error) {
-        console.error('Error al finalizar jornada:', error);
-        alert('Error al finalizar la jornada: ' + error.message);
-    }
-}
-
-function guardarActividades() {
-    if (!sesionActual) {
-        alert('Inicia una jornada primero para guardar actividades.');
-        return;
-    }
+    sesionActual.fin = hora;
+    sesionActual.actividades = actividadesDelDia.map(a => a.texto).filter(t => t.trim() !== '');
+    sesionActual.resumen = resumenDiario;
     
-    const actividades = elementoActividades.value;
+    // Agregar a registros
+    registros.unshift(sesionActual);
     
-    try {
-        if (db) {
-            // Actualizar en la base de datos
-            db.run(
-                "UPDATE registros SET actividades = ? WHERE id = ?",
-                [actividades, sesionActual.id]
-            );
-            
-            guardarBaseDeDatos();
-            
-            // Actualizar localmente
-            sesionActual.actividades = actividades;
-        } else {
-            // Respaldo con localStorage
-            sesionActual.actividades = actividades;
-            localStorage.setItem('registros', JSON.stringify(registros));
-        }
-        
-        alert('Actividades guardadas correctamente.');
-    } catch (error) {
-        console.error('Error al guardar actividades:', error);
-        alert('Error al guardar actividades: ' + error.message);
-    }
+    // Limpiar actividades del día para el próximo día
+    actividadesDelDia = [];
+    resumenDiario = '';
+    document.getElementById('resumen-diario').value = '';
+    
+    sesionActual = null;
+    
+    guardarDatos();
+    actualizarEstado();
+    actualizarEstadisticas();
+    renderizarTablaHistorial();
+    renderizarActividades();
+    
+    mostrarNotificacion(`Jornada finalizada a las ${hora}`);
 }
 
 function actualizarEstadisticas() {
+    const fechaHoy = obtenerFechaActual();
+    
     // Calcular horas de hoy
-    const hoy = new Date().toLocaleDateString('es-ES');
-    const registrosHoy = registros.filter(registro => 
-        registro.fecha === hoy && registro.hora_fin);
+    const registrosHoy = registros.filter(registro => registro.fecha === fechaHoy && registro.fin);
     
     let minutosTotalesHoy = 0;
     registrosHoy.forEach(registro => {
-        const inicio = convertirHoraStringADate(registro.hora_inicio);
-        const fin = convertirHoraStringADate(registro.hora_fin);
+        const inicio = convertirHoraStringADate(registro.inicio);
+        const fin = convertirHoraStringADate(registro.fin);
         const diferenciaMs = fin - inicio;
         minutosTotalesHoy += diferenciaMs / (1000 * 60);
     });
@@ -325,19 +333,19 @@ function actualizarEstadisticas() {
     const minutosHoy = Math.floor(minutosTotalesHoy % 60);
     elementoHorasHoy.textContent = `${horasHoy}h ${minutosHoy}m`;
     
-    // Calcular horas de la semana
-    const semanaPasada = new Date();
-    semanaPasada.setDate(semanaPasada.getDate() - 7);
+    // Calcular horas de la semana (últimos 7 días)
+    const fechaLimite = new Date();
+    fechaLimite.setDate(fechaLimite.getDate() - 7);
     
     const registrosSemana = registros.filter(registro => {
-        const fechaRegistro = new Date(registro.fecha.split('/').reverse().join('-'));
-        return fechaRegistro >= semanaPasada && registro.hora_fin;
+        const fechaRegistro = convertirFechaStringADate(registro.fecha);
+        return fechaRegistro >= fechaLimite && registro.fin;
     });
     
     let minutosTotalesSemana = 0;
     registrosSemana.forEach(registro => {
-        const inicio = convertirHoraStringADate(registro.hora_inicio);
-        const fin = convertirHoraStringADate(registro.hora_fin);
+        const inicio = convertirHoraStringADate(registro.inicio);
+        const fin = convertirHoraStringADate(registro.fin);
         const diferenciaMs = fin - inicio;
         minutosTotalesSemana += diferenciaMs / (1000 * 60);
     });
@@ -352,24 +360,40 @@ function renderizarTablaHistorial() {
     
     const registrosARenderizar = registrosFiltrados.length > 0 ? registrosFiltrados : registros;
     
+    if (registrosARenderizar.length === 0) {
+        cuerpoTablaHistorial.innerHTML = `
+            <tr>
+                <td colspan="6" style="text-align: center; padding: 20px;">
+                    No hay registros disponibles
+                </td>
+            </tr>
+        `;
+        return;
+    }
+    
     registrosARenderizar.forEach(registro => {
-        if (!registro.hora_fin) return;
+        if (!registro.fin) return;
         
         const fila = document.createElement('tr');
         
         // Calcular horas trabajadas
-        const inicio = convertirHoraStringADate(registro.hora_inicio);
-        const fin = convertirHoraStringADate(registro.hora_fin);
+        const inicio = convertirHoraStringADate(registro.inicio);
+        const fin = convertirHoraStringADate(registro.fin);
         const diferenciaMs = fin - inicio;
         const horas = Math.floor(diferenciaMs / (1000 * 60 * 60));
         const minutos = Math.floor((diferenciaMs % (1000 * 60 * 60)) / (1000 * 60));
         
+        // Resumen de actividades (mostrar solo las primeras)
+        const actividadesResumen = registro.actividades && registro.actividades.length > 0 
+            ? registro.actividades.slice(0, 2).join(', ') + (registro.actividades.length > 2 ? '...' : '')
+            : 'Sin actividades';
+        
         fila.innerHTML = `
             <td>${registro.fecha}</td>
-            <td>${registro.hora_inicio}</td>
-            <td>${registro.hora_fin}</td>
+            <td>${registro.inicio}</td>
+            <td>${registro.fin}</td>
             <td>${horas}h ${minutos}m</td>
-            <td>${registro.actividades || '-'}</td>
+            <td title="${registro.actividades ? registro.actividades.join('\n') : ''}">${actividadesResumen}</td>
             <td>
                 <button class="action-btn btn-edit" data-id="${registro.id}">Editar</button>
                 <button class="action-btn btn-delete" data-id="${registro.id}">Eliminar</button>
@@ -382,14 +406,14 @@ function renderizarTablaHistorial() {
     // Agregar event listeners a los botones de editar y eliminar
     document.querySelectorAll('.btn-edit').forEach(boton => {
         boton.addEventListener('click', (e) => {
-            const id = e.target.dataset.id;
+            const id = parseInt(e.target.dataset.id);
             abrirModalEditar(id);
         });
     });
     
     document.querySelectorAll('.btn-delete').forEach(boton => {
         boton.addEventListener('click', (e) => {
-            const id = e.target.dataset.id;
+            const id = parseInt(e.target.dataset.id);
             eliminarRegistro(id);
         });
     });
@@ -397,39 +421,59 @@ function renderizarTablaHistorial() {
 
 function filtrarRegistros() {
     const fechaFiltro = document.getElementById('filtro-fecha').value;
-    if (!fechaFiltro) {
-        alert('Por favor, selecciona una fecha para filtrar.');
+    const mesFiltro = document.getElementById('filtro-mes').value;
+    
+    if (!fechaFiltro && !mesFiltro) {
+        mostrarNotificacion('Selecciona una fecha o mes para filtrar', 'error');
         return;
     }
     
-    // Convertir la fecha del filtro al formato local
-    const objetoFecha = new Date(fechaFiltro);
-    const fechaFiltroFormateada = objetoFecha.toLocaleDateString('es-ES');
-    
-    registrosFiltrados = registros.filter(registro => 
-        registro.fecha === fechaFiltroFormateada && registro.hora_fin);
+    registrosFiltrados = registros.filter(registro => {
+        if (fechaFiltro) {
+            // Convertir fecha del filtro al formato local
+            const fechaFiltroObj = new Date(fechaFiltro);
+            const fechaFiltroFormateada = fechaFiltroObj.toLocaleDateString('es-ES', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit'
+            });
+            return registro.fecha === fechaFiltroFormateada && registro.fin;
+        }
+        
+        if (mesFiltro) {
+            const [anio, mes] = mesFiltro.split('-');
+            const registroMes = registro.fecha.split('/')[1];
+            const registroAnio = registro.fecha.split('/')[2];
+            return registroMes === mes && registroAnio === anio && registro.fin;
+        }
+        
+        return false;
+    });
     
     renderizarTablaHistorial();
+    mostrarNotificacion(`Mostrando ${registrosFiltrados.length} registros`);
 }
 
 function limpiarFiltro() {
     document.getElementById('filtro-fecha').value = '';
+    document.getElementById('filtro-mes').value = '';
     registrosFiltrados = [];
     renderizarTablaHistorial();
+    mostrarNotificacion('Mostrando todos los registros');
 }
 
 function abrirModalEditar(id) {
-    const registro = registros.find(r => r.id == id);
+    const registro = registros.find(r => r.id === id);
     if (!registro) return;
     
     document.getElementById('editar-id').value = registro.id;
     
     // Convertir la fecha al formato YYYY-MM-DD para el input date
     const [dia, mes, anio] = registro.fecha.split('/');
-    document.getElementById('editar-fecha').value = `${anio}-${mes.padStart(2, '0')}-${dia.padStart(2, '0')}`;
+    document.getElementById('editar-fecha').value = `${anio}-${mes}-${dia}`;
     
     // Convertir la hora al formato HH:MM para el input time
-    const [hora, modificador] = registro.hora_inicio.split(' ');
+    const [hora, modificador] = registro.inicio.split(' ');
     let [horas, minutos] = hora.split(':');
     
     if (modificador === 'p.m.' && horas < 12) {
@@ -440,8 +484,8 @@ function abrirModalEditar(id) {
     
     document.getElementById('editar-inicio').value = `${horas.toString().padStart(2, '0')}:${minutos}`;
     
-    if (registro.hora_fin) {
-        const [horaFin, modificadorFin] = registro.hora_fin.split(' ');
+    if (registro.fin) {
+        const [horaFin, modificadorFin] = registro.fin.split(' ');
         let [horasFin, minutosFin] = horaFin.split(':');
         
         if (modificadorFin === 'p.m.' && horasFin < 12) {
@@ -453,7 +497,7 @@ function abrirModalEditar(id) {
         document.getElementById('editar-fin').value = `${horasFin.toString().padStart(2, '0')}:${minutosFin}`;
     }
     
-    document.getElementById('editar-actividades').value = registro.actividades || '';
+    document.getElementById('editar-actividades').value = registro.actividades ? registro.actividades.join('\n') : '';
     
     modalEditar.style.display = 'flex';
 }
@@ -463,102 +507,75 @@ function cerrarModal() {
 }
 
 function guardarCambios() {
-    const id = document.getElementById('editar-id').value;
+    const id = parseInt(document.getElementById('editar-id').value);
     const fecha = document.getElementById('editar-fecha').value;
     const hora_inicio = document.getElementById('editar-inicio').value;
     const hora_fin = document.getElementById('editar-fin').value;
     const actividades = document.getElementById('editar-actividades').value;
     
     if (!fecha || !hora_inicio) {
-        alert('Por favor, completa al menos la fecha y hora de inicio.');
+        mostrarNotificacion('Completa al menos la fecha y hora de inicio', 'error');
         return;
     }
     
     // Convertir la fecha al formato local
-    const objetoFecha = new Date(fecha);
-    const fechaFormateada = objetoFecha.toLocaleDateString('es-ES');
+    const fechaObj = new Date(fecha);
+    const fechaFormateada = fechaObj.toLocaleDateString('es-ES', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    });
     
     // Convertir la hora al formato local
-    const objetoHoraInicio = new Date(`1970-01-01T${hora_inicio}`);
-    const inicioFormateado = objetoHoraInicio.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+    const horaInicioObj = new Date(`1970-01-01T${hora_inicio}`);
+    const inicioFormateado = horaInicioObj.toLocaleTimeString('es-ES', { 
+        hour: '2-digit', 
+        minute: '2-digit' 
+    });
     
     let finFormateado = '';
     if (hora_fin) {
-        const objetoHoraFin = new Date(`1970-01-01T${hora_fin}`);
-        finFormateado = objetoHoraFin.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+        const horaFinObj = new Date(`1970-01-01T${hora_fin}`);
+        finFormateado = horaFinObj.toLocaleTimeString('es-ES', { 
+            hour: '2-digit', 
+            minute: '2-digit' 
+        });
     }
     
-    try {
-        if (db) {
-            // Actualizar en la base de datos
-            db.run(
-                "UPDATE registros SET fecha = ?, hora_inicio = ?, hora_fin = ?, actividades = ? WHERE id = ?",
-                [fechaFormateada, inicioFormateado, finFormateado, actividades, id]
-            );
-            
-            guardarBaseDeDatos();
-            
-            // Actualizar localmente
-            const indiceRegistro = registros.findIndex(r => r.id == id);
-            if (indiceRegistro !== -1) {
-                registros[indiceRegistro].fecha = fechaFormateada;
-                registros[indiceRegistro].hora_inicio = inicioFormateado;
-                registros[indiceRegistro].hora_fin = finFormateado || registros[indiceRegistro].hora_fin;
-                registros[indiceRegistro].actividades = actividades;
-            }
-        } else {
-            // Respaldo con localStorage
-            const indiceRegistro = registros.findIndex(r => r.id == id);
-            if (indiceRegistro !== -1) {
-                registros[indiceRegistro].fecha = fechaFormateada;
-                registros[indiceRegistro].hora_inicio = inicioFormateado;
-                registros[indiceRegistro].hora_fin = finFormateado || registros[indiceRegistro].hora_fin;
-                registros[indiceRegistro].actividades = actividades;
-                localStorage.setItem('registros', JSON.stringify(registros));
-            }
-        }
+    const indiceRegistro = registros.findIndex(r => r.id === id);
+    if (indiceRegistro !== -1) {
+        registros[indiceRegistro].fecha = fechaFormateada;
+        registros[indiceRegistro].inicio = inicioFormateado;
+        registros[indiceRegistro].fin = finFormateado || registros[indiceRegistro].fin;
+        registros[indiceRegistro].actividades = actividades.split('\n').filter(a => a.trim() !== '');
         
-        cerrarModal();
-        alert('Registro actualizado correctamente.');
+        guardarDatos();
         actualizarEstadisticas();
         renderizarTablaHistorial();
-    } catch (error) {
-        console.error('Error al actualizar registro:', error);
-        alert('Error al actualizar el registro: ' + error.message);
+        cerrarModal();
+        
+        mostrarNotificacion('Registro actualizado correctamente');
+    } else {
+        mostrarNotificacion('Registro no encontrado', 'error');
     }
 }
 
 function eliminarRegistro(id) {
-    if (!confirm('¿Estás seguro de que quieres eliminar este registro?')) {
+    if (!confirm('¿Estás seguro de que quieres eliminar este registro? Esta acción no se puede deshacer.')) {
         return;
     }
     
-    try {
-        if (db) {
-            // Eliminar de la base de datos
-            db.run("DELETE FROM registros WHERE id = ?", [id]);
-            guardarBaseDeDatos();
-            
-            // Eliminar localmente
-            registros = registros.filter(registro => registro.id != id);
-        } else {
-            // Respaldo con localStorage
-            registros = registros.filter(registro => registro.id != id);
-            localStorage.setItem('registros', JSON.stringify(registros));
-        }
-        
-        alert('Registro eliminado correctamente.');
-        actualizarEstadisticas();
-        renderizarTablaHistorial();
-    } catch (error) {
-        console.error('Error al eliminar registro:', error);
-        alert('Error al eliminar el registro: ' + error.message);
-    }
+    registros = registros.filter(registro => registro.id !== id);
+    guardarDatos();
+    actualizarEstadisticas();
+    renderizarTablaHistorial();
+    
+    mostrarNotificacion('Registro eliminado correctamente');
 }
 
+// Funciones de exportación
 function exportarPDF() {
     try {
-        // Crear PDF con jsPDF
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF();
         
@@ -566,7 +583,7 @@ function exportarPDF() {
         doc.setFontSize(20);
         doc.text('Registro de Horas Laborales', 105, 15, { align: 'center' });
         doc.setFontSize(12);
-        doc.text(`Generado el: ${new Date().toLocaleDateString()}`, 105, 22, { align: 'center' });
+        doc.text(`Generado el: ${new Date().toLocaleDateString('es-ES')}`, 105, 22, { align: 'center' });
         
         // Datos de la tabla
         const tableColumn = ["Fecha", "Inicio", "Fin", "Horas", "Actividades"];
@@ -575,21 +592,21 @@ function exportarPDF() {
         const registrosARenderizar = registrosFiltrados.length > 0 ? registrosFiltrados : registros;
         
         registrosARenderizar.forEach(registro => {
-            if (!registro.hora_fin) return;
+            if (!registro.fin) return;
             
             // Calcular horas trabajadas
-            const inicio = convertirHoraStringADate(registro.hora_inicio);
-            const fin = convertirHoraStringADate(registro.hora_fin);
+            const inicio = convertirHoraStringADate(registro.inicio);
+            const fin = convertirHoraStringADate(registro.fin);
             const diferenciaMs = fin - inicio;
             const horas = Math.floor(diferenciaMs / (1000 * 60 * 60));
             const minutos = Math.floor((diferenciaMs % (1000 * 60 * 60)) / (1000 * 60));
             
             const registroData = [
                 registro.fecha,
-                registro.hora_inicio,
-                registro.hora_fin,
+                registro.inicio,
+                registro.fin,
                 `${horas}h ${minutos}m`,
-                registro.actividades || ''
+                registro.actividades ? registro.actividades.join(', ') : ''
             ];
             
             tableRows.push(registroData);
@@ -605,11 +622,12 @@ function exportarPDF() {
         });
         
         // Guardar PDF
-        doc.save('registro-horas.pdf');
-        alert('PDF exportado correctamente.');
+        const fecha = new Date().toISOString().split('T')[0];
+        doc.save(`registro-horas-${fecha}.pdf`);
+        mostrarNotificacion('PDF exportado correctamente');
     } catch (error) {
         console.error('Error al exportar PDF:', error);
-        alert('Error al exportar a PDF: ' + error.message);
+        mostrarNotificacion('Error al exportar a PDF', 'error');
     }
 }
 
@@ -625,21 +643,21 @@ function exportarExcel() {
         const registrosARenderizar = registrosFiltrados.length > 0 ? registrosFiltrados : registros;
         
         registrosARenderizar.forEach(registro => {
-            if (!registro.hora_fin) return;
+            if (!registro.fin) return;
             
             // Calcular horas trabajadas
-            const inicio = convertirHoraStringADate(registro.hora_inicio);
-            const fin = convertirHoraStringADate(registro.hora_fin);
+            const inicio = convertirHoraStringADate(registro.inicio);
+            const fin = convertirHoraStringADate(registro.fin);
             const diferenciaMs = fin - inicio;
             const horas = Math.floor(diferenciaMs / (1000 * 60 * 60));
             const minutos = Math.floor((diferenciaMs % (1000 * 60 * 60)) / (1000 * 60));
             
             datos.push([
                 registro.fecha,
-                registro.hora_inicio,
-                registro.hora_fin,
+                registro.inicio,
+                registro.fin,
                 `${horas}h ${minutos}m`,
-                registro.actividades || ''
+                registro.actividades ? registro.actividades.join('; ') : ''
             ]);
         });
         
@@ -651,50 +669,41 @@ function exportarExcel() {
         XLSX.utils.book_append_sheet(wb, ws, 'Registros de Horas');
         
         // Guardar archivo
-        XLSX.writeFile(wb, 'registro-horas.xlsx');
-        alert('Excel exportado correctamente.');
+        const fecha = new Date().toISOString().split('T')[0];
+        XLSX.writeFile(wb, `registro-horas-${fecha}.xlsx`);
+        mostrarNotificacion('Excel exportado correctamente');
     } catch (error) {
         console.error('Error al exportar Excel:', error);
-        alert('Error al exportar a Excel: ' + error.message);
+        mostrarNotificacion('Error al exportar a Excel', 'error');
     }
 }
 
 function crearRespaldo() {
     try {
-        if (db) {
-            // Crear respaldo de la base de datos SQLite
-            const data = db.export();
-            const arrayData = Array.from(new Uint8Array(data));
-            
-            const blob = new Blob([JSON.stringify(arrayData)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `respaldo-horas-${new Date().toISOString().split('T')[0]}.json`;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            URL.revokeObjectURL(url);
-        } else {
-            // Crear respaldo del localStorage
-            const datos = localStorage.getItem('registros');
-            const blob = new Blob([datos], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `respaldo-horas-${new Date().toISOString().split('T')[0]}.json`;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            URL.revokeObjectURL(url);
-        }
+        const datos = {
+            registros: registros,
+            actividadesDelDia: actividadesDelDia,
+            resumenDiario: resumenDiario,
+            sesionActual: sesionActual,
+            fechaRespaldo: new Date().toISOString(),
+            version: '1.0'
+        };
         
-        alert('Respaldo creado correctamente.');
+        const blob = new Blob([JSON.stringify(datos, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `respaldo-horas-${new Date().toISOString().split('T')[0]}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        
+        mostrarNotificacion('Respaldo creado correctamente');
     } catch (error) {
         console.error('Error al crear respaldo:', error);
-        alert('Error al crear respaldo: ' + error.message);
+        mostrarNotificacion('Error al crear respaldo', 'error');
     }
 }
 
@@ -703,6 +712,7 @@ function restaurarRespaldo(event) {
     if (!file) return;
     
     if (!confirm('¿Estás seguro de que quieres restaurar este respaldo? Se perderán los datos actuales.')) {
+        event.target.value = ''; // Resetear el input
         return;
     }
     
@@ -710,26 +720,42 @@ function restaurarRespaldo(event) {
     reader.onload = function(e) {
         try {
             const contenido = e.target.result;
+            const datos = JSON.parse(contenido);
             
-            if (db) {
-                // Restaurar base de datos SQLite
-                const arrayData = JSON.parse(contenido);
-                const buffer = new Uint8Array(arrayData).buffer;
-                
-                db.close();
-                db = new SQL.Database(new Uint8Array(buffer));
-                guardarBaseDeDatos();
-            } else {
-                // Restaurar localStorage
-                localStorage.setItem('registros', contenido);
+            // Validar que sea un respaldo válido
+            if (!datos.registros || !Array.isArray(datos.registros)) {
+                throw new Error('El archivo no es un respaldo válido');
             }
             
-            // Recargar datos
-            cargarDatos();
-            alert('Respaldo restaurado correctamente.');
+            // Restaurar datos
+            registros = datos.registros || [];
+            actividadesDelDia = datos.actividadesDelDia || [];
+            resumenDiario = datos.resumenDiario || '';
+            
+            // Verificar sesión actual
+            const fechaHoy = obtenerFechaActual();
+            if (datos.sesionActual && datos.sesionActual.fecha === fechaHoy) {
+                sesionActual = datos.sesionActual;
+            } else {
+                sesionActual = null;
+            }
+            
+            // Actualizar interfaz
+            actualizarEstado();
+            actualizarEstadisticas();
+            renderizarTablaHistorial();
+            renderizarActividades();
+            document.getElementById('resumen-diario').value = resumenDiario;
+            
+            // Guardar datos restaurados
+            guardarDatos();
+            
+            event.target.value = ''; // Resetear el input
+            mostrarNotificacion('Respaldo restaurado correctamente');
         } catch (error) {
             console.error('Error al restaurar respaldo:', error);
-            alert('Error al restaurar respaldo: ' + error.message);
+            mostrarNotificacion('Error al restaurar respaldo: ' + error.message, 'error');
+            event.target.value = ''; // Resetear el input
         }
     };
     reader.readAsText(file);
@@ -752,4 +778,9 @@ function convertirHoraStringADate(horaString) {
     const fecha = new Date();
     fecha.setHours(horas, minutos, 0, 0);
     return fecha;
+}
+
+function convertirFechaStringADate(fechaString) {
+    const [dia, mes, anio] = fechaString.split('/');
+    return new Date(`${anio}-${mes}-${dia}`);
 }
